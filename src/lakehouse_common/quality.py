@@ -43,8 +43,9 @@ class CheckResult:
 
 
 class DataQualityError(Exception):
-    def __init__(self, failures: Sequence[CheckResult]):
+    def __init__(self, failures: Sequence[CheckResult], results: Sequence[CheckResult] | None = None):
         self.failures = list(failures)
+        self.results = list(results) if results is not None else self.failures  # every check, passed or not
         lines = "\n".join(f"  - {f}" for f in self.failures)
         super().__init__(f"{len(self.failures)} data quality check(s) failed:\n{lines}")
 
@@ -132,6 +133,7 @@ def check_row_count(df: DataFrame, *, table: str, min_rows: int = 1, severity: s
 
 def raise_on_failure(results: Iterable[CheckResult]) -> None:
     """Raise DataQualityError if any check with severity "error" failed. Failed warnings are ignored."""
+    results = list(results)
     failures = [r for r in results if not r.passed and r.severity == ERROR]
     if failures:
-        raise DataQualityError(failures)
+        raise DataQualityError(failures, results)

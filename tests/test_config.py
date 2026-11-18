@@ -39,6 +39,18 @@ def test_unsupported_scheme_is_rejected():
         LakehouseConfig(storage_root="hdfs://namenode/lake", landing_dir="x")
 
 
+def test_landing_root_defaults_to_the_local_landing_dir(tmp_path):
+    cfg = LakehouseConfig(storage_root="s3a://bucket/lakehouse", landing_dir=str(tmp_path))
+    assert cfg.landing_root == tmp_path.resolve().as_uri()
+    assert cfg.is_s3 and cfg.uses_s3
+
+
+def test_landing_root_on_s3():
+    cfg = LakehouseConfig.from_env({"LAKEHOUSE_LANDING_ROOT": "s3a://bucket/landing", "LAKEHOUSE_STORAGE_ROOT": "/tmp/lake"})
+    assert cfg.landing_root == "s3a://bucket/landing"
+    assert not cfg.is_s3 and cfg.uses_s3
+
+
 def test_table_path():
     cfg = LakehouseConfig(storage_root="s3a://bucket/lakehouse", landing_dir="x")
     assert cfg.table_path("silver", "orders") == "s3a://bucket/lakehouse/silver/orders"

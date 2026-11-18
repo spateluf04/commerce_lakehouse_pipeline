@@ -4,3 +4,7 @@
 #   hadoop-aws must equal the bundled Hadoop version (3.3.4); see docker/Dockerfile
 pyspark==3.5.9
 delta-spark==3.3.3
+# Only used to upload landing files when the landing root is on S3. Pinned to the version that the
+# apache/airflow:3.3.2 image already ships (Airflow's Amazon provider depends on it), so pip doesn't
+# swap it for a version the provider wasn't tested with.
+boto3==1.43.75

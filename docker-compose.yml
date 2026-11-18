@@ -1,0 +1,52 @@
+# Local Airflow: Postgres for Airflow's metadata, plus one Airflow container.
+#
+# `airflow standalone` runs the scheduler, API server/UI and DAG processor in one container.
+# That's fine on a laptop. In production each would be a separate service.
+# Spark runs in local mode inside the Airflow container, started by each task.
+#
+#   docker compose up -d --build      then open http://localhost:8080
+#   docker compose down               (add -v to also delete the Airflow metadata database)
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow  # local-only metadata database, not a real secret
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 10
+
+  airflow:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: commerce-lakehouse:dev
+    command: standalone
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    env_file:
+      - path: .env  # your local settings (storage root, AWS profile, Slack webhook); optional
+        required: false
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/project/dags
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS: "true"  # local only: the UI has no login
+      LAKEHOUSE_STORAGE_ROOT: ${LAKEHOUSE_STORAGE_ROOT:-file:///opt/project/data/lakehouse}
+      LAKEHOUSE_LANDING_DIR: /opt/project/data/landing
+    volumes:
+      - .:/opt/project
+      # AWS credentials come from your profile, mounted read-only. They're never copied into the image.
+      - ${USERPROFILE:-${HOME}}/.aws:/home/airflow/.aws:ro
+
+volumes:
+  airflow-db:
