@@ -1,0 +1,6 @@
+# These three versions move together. Change one, check the others:
+#   pyspark 3.5.x bundles Hadoop 3.3.4 and Scala 2.12
+#   delta-spark 3.3.x is built for Spark 3.5 (jar: io.delta:delta-spark_2.12)
+#   hadoop-aws must equal the bundled Hadoop version (3.3.4); see docker/Dockerfile
+pyspark==3.5.9
+delta-spark==3.3.3

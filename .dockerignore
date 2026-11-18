@@ -1,0 +1,7 @@
+.git
+.env
+data/
+logs/
+**/__pycache__
+.pytest_cache
+infra/terraform/.terraform

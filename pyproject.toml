@@ -1,0 +1,11 @@
+[project]
+name = "commerce-lakehouse-pipeline"
+version = "0.1.0"
+description = "Medallion lakehouse pipeline for synthetic e-commerce data: Spark, Delta Lake, Airflow, S3."
+requires-python = ">=3.11,<3.12"
+# Runtime dependencies are pinned in requirements.txt and installed into the Docker image.
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-ra"
