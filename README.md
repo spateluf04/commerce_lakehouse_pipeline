@@ -123,6 +123,10 @@ Turn on `commerce_lakehouse_daily` in the UI, or trigger one day from the CLI:
 docker compose exec airflow airflow dags trigger commerce_lakehouse_daily --logical-date 2026-03-01T00:00:00+00:00
 ```
 
+`ds` is the date part of `--logical-date`, so this run processes 2026-03-01. For a manual run, Airflow 3
+sets the data interval from the time you trigger, not from the logical date, which is why every task
+uses `{{ ds }}` and never `data_interval_start`.
+
 ### Without Airflow (one job at a time)
 
 ```powershell
@@ -137,17 +141,34 @@ The output lands in `data/landing/` and `data/lakehouse/<layer>/<table>/`, both 
 
 ## Run on S3
 
-1. **Provision the bucket and IAM user** (needs admin credentials for your own account, used only for Terraform):
+1. **Provision the bucket and IAM user.** This needs admin credentials for your own account, used only
+   for Terraform: an IAM user with `AdministratorAccess` (not the root account), stored in its own profile
+   with `aws configure --profile lakehouse-admin`. Point Terraform at that profile for this shell:
    ```powershell
+   $env:AWS_PROFILE = "lakehouse-admin"
+   aws sts get-caller-identity                 # check you're the admin user, not root
    cd infra/terraform
-   copy terraform.tfvars.example terraform.tfvars
-   terraform init ; terraform apply
+   copy terraform.tfvars.example terraform.tfvars   # optionally set budget_alert_email
+   terraform init
+   terraform plan -out "$env:TEMP\lakehouse.tfplan"   # review: 10 resources, 11 with the budget
+   terraform apply "$env:TEMP\lakehouse.tfplan"
    terraform output
    ```
-2. **Create an access key for the pipeline user.** This isn't done in Terraform, because the secret would end up in the state file. Store the key in a profile:
+2. **Create an access key for the pipeline user.** This isn't done in Terraform, because the secret would
+   end up in the state file. This pipes the new key straight into the `commerce-lakehouse` profile, so the
+   secret is never printed to the screen:
    ```powershell
-   aws iam create-access-key --user-name commerce-lakehouse-pipeline
-   aws configure --profile commerce-lakehouse   # paste the key ID and secret
+   $key = (aws iam create-access-key --user-name commerce-lakehouse-pipeline --profile lakehouse-admin --output json | ConvertFrom-Json).AccessKey
+   aws configure set aws_access_key_id $key.AccessKeyId --profile commerce-lakehouse
+   aws configure set aws_secret_access_key $key.SecretAccessKey --profile commerce-lakehouse
+   aws configure set region us-east-1 --profile commerce-lakehouse
+   Remove-Variable key
+   ```
+   Then prove least privilege. The first command should succeed and the other two should fail with AccessDenied:
+   ```powershell
+   aws s3 ls s3://commerce-lakehouse-<account-id> --profile commerce-lakehouse
+   aws s3 ls --profile commerce-lakehouse
+   aws iam list-users --profile commerce-lakehouse
    ```
 3. **Point the pipeline at S3** in `.env`, using the values from `terraform output`:
    ```
@@ -157,6 +178,16 @@ The output lands in `data/landing/` and `data/lakehouse/<layer>/<table>/`, both 
    AWS_REGION=us-east-1
    ```
 4. Run `docker compose up -d` and trigger the DAG as above. Docker Compose mounts `~/.aws` read-only, and no credential is ever copied into the image or the repo.
+   Check that the container acts as the pipeline user, not your admin:
+   ```powershell
+   docker compose exec airflow python -c "import boto3; print(boto3.client('sts').get_caller_identity()['Arn'])"
+   ```
+   Two things to expect:
+   - **Unpausing schedules one run** for the latest complete day, even with `catchup=False`. It writes to S3 like any other day.
+   - **Airflow's metadata database remembers local runs.** It lives in the `airflow-db` volume, which survives
+     `docker compose down`. A day that already succeeded locally counts as done, so a plain backfill skips it
+     even though it was never written to S3. Add `--reprocess-behavior completed`, or start from a clean
+     database with `docker compose down -v`.
 
 How S3 access works:
 
@@ -172,12 +203,17 @@ of the interval, and the run starts after the interval ends. `catchup=False`, so
 doesn't automatically start runs for every day since `start_date`. History is loaded on purpose:
 
 ```powershell
-# Load 1–7 March 2026, one day at a time and in order (max_active_runs=1)
-docker compose exec airflow airflow backfill create --dag-id commerce_lakehouse_daily --from-date 2026-03-01 --to-date 2026-03-07
+# Load 1–7 March 2026, one day at a time and in order
+docker compose exec airflow airflow backfill create --dag-id commerce_lakehouse_daily --from-date 2026-03-01 --to-date 2026-03-07 --max-active-runs 1
 
 # Re-process days that already succeeded, for example after fixing a silver bug
-docker compose exec airflow airflow backfill create --dag-id commerce_lakehouse_daily --from-date 2026-03-01 --to-date 2026-03-07 --reprocess-behavior completed
+docker compose exec airflow airflow backfill create --dag-id commerce_lakehouse_daily --from-date 2026-03-01 --to-date 2026-03-07 --reprocess-behavior completed --max-active-runs 1
 ```
+
+Always pass `--max-active-runs 1`. A backfill has its own run limit and doesn't use the DAG's
+`max_active_runs=1`, so without the flag it runs several days at once. On S3 that means two
+Spark jobs committing to the same Delta table at the same moment, which the single-writer
+log store doesn't protect against (see above).
 
 Backfills and re-runs are safe because every write is idempotent for its `ds`:
 
@@ -227,11 +263,29 @@ The lakehouse is a few MB per simulated day. To keep the bill at roughly zero:
 When you're finished, delete everything:
 
 ```powershell
+docker compose down
+
+# 1. Delete the pipeline user's access key. Terraform didn't create it, and it can't delete a user that still has one.
+$env:AWS_PROFILE = "lakehouse-admin"
+$keyId = aws iam list-access-keys --user-name commerce-lakehouse-pipeline --query "AccessKeyMetadata[0].AccessKeyId" --output text
+aws iam delete-access-key --user-name commerce-lakehouse-pipeline --access-key-id $keyId
+
+# 2. Destroy. force_destroy=true also empties the bucket, including old versions.
 cd infra/terraform
-terraform destroy        # force_destroy=true also empties the bucket, including old versions
+terraform destroy
+
+# 3. Check that it's gone. Both commands should fail (404 / NoSuchEntity).
+aws s3api head-bucket --bucket commerce-lakehouse-<account-id>
+aws iam get-user --user-name commerce-lakehouse-pipeline
+
+# 4. Point the pipeline back at the local filesystem.
+cd ../..
+copy .env.example .env
 ```
 
-Delete the pipeline user's access key first (`aws iam delete-access-key ...`), or Terraform can't delete the user.
+Finally, remove the `commerce-lakehouse` and `lakehouse-admin` sections from `~/.aws/credentials` and
+`~/.aws/config`, and deactivate or delete the admin user's access key in the IAM console.
+`terraform.tfstate` and `terraform.tfvars` are gitignored, so `git status` should show neither.
 
 ## Design notes
 
