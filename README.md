@@ -1,5 +1,7 @@
 # Commerce Data Lakehouse Pipeline
 
+[![tests](https://github.com/spateluf04/commerce_lakehouse_pipeline/actions/workflows/tests.yml/badge.svg)](https://github.com/spateluf04/commerce_lakehouse_pipeline/actions/workflows/tests.yml)
+
 A daily batch pipeline for e-commerce data, built on a medallion (bronze/silver/gold) lakehouse:
 
 - **PySpark + Delta Lake** for processing and storage
@@ -78,7 +80,8 @@ The versions are pinned in `requirements.txt`, `docker/Dockerfile` and `infra/te
 ├── infra/terraform/                   S3 bucket + least-privilege IAM
 ├── docker/Dockerfile                  one image for Airflow, Spark jobs and tests
 ├── docker-compose.yml                 Postgres + Airflow
-└── docs/standards.md                  naming, partitioning and data quality rules
+├── docs/standards.md                  naming, partitioning and data quality rules
+└── .github/workflows/tests.yml        CI: the quick test suite on every push
 ```
 
 ## Setup
@@ -87,7 +90,7 @@ You only need Docker Desktop (with the WSL2 backend on Windows). Terraform and t
 only needed for the S3 setup.
 
 ```powershell
-git clone <repo> ; cd commerce-lakehouse-pipeline
+git clone https://github.com/spateluf04/commerce_lakehouse_pipeline.git ; cd commerce_lakehouse_pipeline
 copy .env.example .env          # defaults to the local filesystem
 docker build -f docker/Dockerfile -t commerce-lakehouse:dev .
 ```
@@ -108,6 +111,9 @@ The tests use small fixture DataFrames and the local filesystem only. They never
 - the DAG's structure, the alert callback, metrics and S3A settings
 
 The `integration` tests run whole pipeline days through Spark, so they're slow.
+
+On GitHub, [`.github/workflows/tests.yml`](.github/workflows/tests.yml) runs the quick suite on every push
+and pull request, with Python 3.11 and Java 17 and no AWS credentials.
 
 ## Run locally
 
